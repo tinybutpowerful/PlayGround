@@ -117,7 +117,7 @@
     // Hit line
     const lineGrad = ctx.createLinearGradient(0,0,w,0);
     lineGrad.addColorStop(0,'#a88bff22'); lineGrad.addColorStop(.25,'#a88bffcc'); lineGrad.addColorStop(.5,'#d6ff62'); lineGrad.addColorStop(.75,'#62e8e4cc'); lineGrad.addColorStop(1,'#ff74ba22');
-    ctx.shadowColor = '#d6ff62'; ctx.shadowBlur = 12; ctx.fillStyle = lineGrad; ctx.fillRect(0, hitY, w, 2); ctx.shadowBlur = 0;
+    ctx.shadowColor = '#d6ff62'; ctx.shadowBlur = 16; ctx.fillStyle = lineGrad; ctx.fillRect(0, hitY - 2, w, 6); ctx.shadowBlur = 0;
     for(let i=0;i<4;i++) {
       const x = i*laneWidth+laneWidth/2;
       ctx.beginPath(); ctx.arc(x,hitY+1,3,0,Math.PI*2); ctx.fillStyle=laneColors[i]; ctx.shadowColor=laneColors[i]; ctx.shadowBlur=10; ctx.fill(); ctx.shadowBlur=0;
