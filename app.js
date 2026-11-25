@@ -10,7 +10,7 @@
   let mode = '', currentName = '', localUrl = '', selectedFile = null, decodedBuffer = null;
   let audioContext = null, demoStart = 0, demoEnd = 0, demoNodes = [], youtubePlayer = null, youtubeReady = false;
   let score = 0, combo = 0, bestCombo = 0, judged = 0, weightedAccuracy = 0, lastFrame = 0, toastTimer = 0;
-  let w = 0, h = 0, dpr = 1, hitFlash = [0,0,0,0];
+  let w = 0, h = 0, dpr = 1, hitFlash = [0,0,0,0], noteFlash = [0,0,0,0];
   const heldLanes = new Set();
   const heldLongs = new Map();
 
@@ -83,6 +83,7 @@
       combo = 0; weightedAccuracy += 0; sayJudge('MISS', '#ff74ba');
     }
     if (note.duration && diff <= .115 && heldLanes.has(note.lane)) heldLongs.set(note.id, note);
+    noteFlash[note.lane] = performance.now() + 150;
     bestCombo = Math.max(bestCombo, combo); hitFlash[note.lane] = performance.now() + 130;
     updateStats();
   }
@@ -145,10 +146,20 @@
           }
         }
         if (y < -nh || y > bottom+10 || (isHeld && diff < -travel)) continue;
-        ctx.shadowColor = laneColors[note.lane]; ctx.shadowBlur = 16;
-        const grad=ctx.createLinearGradient(x,y-nh/2,x+nw,y+nh/2); grad.addColorStop(0,laneColors[note.lane]); grad.addColorStop(.5,'#fff'); grad.addColorStop(1,laneColors[note.lane]);
+        const pressed = noteFlash[note.lane] > nowPerf || (note.duration && isHeld);
+        const pressStrength = noteFlash[note.lane] > nowPerf ? (noteFlash[note.lane] - nowPerf) / 150 : 0;
+        ctx.save();
+        if (pressed) {
+          ctx.translate(x + nw/2, y);
+          ctx.scale(1 + .12 * pressStrength, 1 - .22 * pressStrength);
+          ctx.translate(-(x + nw/2), -y);
+        }
+        ctx.shadowColor = laneColors[note.lane]; ctx.shadowBlur = pressed ? 26 : 16;
+        const grad=ctx.createLinearGradient(x,y-nh/2,x+nw,y+nh/2);
+        grad.addColorStop(0,pressed ? '#fff' : laneColors[note.lane]); grad.addColorStop(.5,'#fff'); grad.addColorStop(1,pressed ? '#fff' : laneColors[note.lane]);
         roundRect(ctx,x,y-nh/2,nw,nh,5,grad); ctx.shadowBlur=0;
         ctx.fillStyle='#fff9'; roundRect(ctx,x+5,y-nh/2+2,nw-10,2,2,'#ffffff8a');
+        ctx.restore();
       }
       if (chart.length && time > chartEndTime() + 1.1) finishRun();
       if (mode === 'file' && audio.ended) finishRun();
