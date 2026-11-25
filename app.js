@@ -11,6 +11,8 @@
   let audioContext = null, demoStart = 0, demoEnd = 0, demoNodes = [], youtubePlayer = null, youtubeReady = false;
   let score = 0, combo = 0, bestCombo = 0, judged = 0, weightedAccuracy = 0, lastFrame = 0, toastTimer = 0;
   let w = 0, h = 0, dpr = 1, hitFlash = [0,0,0,0];
+  const heldLanes = new Set();
+  const heldLongs = new Map();
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
@@ -34,7 +36,36 @@
   }
   function clearRun() {
     score = 0; combo = 0; bestCombo = 0; judged = 0; weightedAccuracy = 0;
-    processed = new Set(); updateStats();
+    processed = new Set(); heldLanes.clear(); heldLongs.clear(); updateStats();
+  }
+  function completeLong(note) {
+    if (!heldLongs.has(note.id)) return;
+    heldLongs.delete(note.id);
+    if (![...heldLongs.values()].some(held => held.lane === note.lane)) heldLanes.delete(note.lane);
+    score += 700; judged++; weightedAccuracy += 100; combo++; bestCombo = Math.max(bestCombo, combo);
+    sayJudge('HOLD +700', '#d6ff62'); updateStats();
+  }
+  function releaseLane(lane) {
+    heldLanes.delete(lane);
+    for (const note of [...heldLongs.values()]) {
+      if (note.lane !== lane) continue;
+      if (gameTime() >= note.time + note.duration - .04) completeLong(note);
+      else {
+        heldLongs.delete(note.id); combo = 0; sayJudge('HOLD BREAK', '#ff74ba'); updateStats();
+      }
+    }
+  }
+  function updateLongNotes(time) {
+    for (const note of [...heldLongs.values()]) {
+      if (time < note.time + note.duration) continue;
+      if (heldLanes.has(note.lane)) completeLong(note);
+      else {
+        heldLongs.delete(note.id); combo = 0; sayJudge('HOLD BREAK', '#ff74ba'); updateStats();
+      }
+    }
+  }
+  function chartEndTime() {
+    return chart.reduce((end, note) => Math.max(end, note.time + (note.duration || 0)), 0);
   }
   function sayJudge(text, color) {
     const toast = $('#judgeToast');
@@ -51,6 +82,7 @@
     } else {
       combo = 0; weightedAccuracy += 0; sayJudge('MISS', '#ff74ba');
     }
+    if (note.duration && diff <= .115 && heldLanes.has(note.lane)) heldLongs.set(note.id, note);
     bestCombo = Math.max(bestCombo, combo); hitFlash[note.lane] = performance.now() + 130;
     updateStats();
   }
@@ -91,20 +123,34 @@
       ctx.fillStyle='#77758b'; ctx.font='9px "DM Mono", monospace'; ctx.textAlign='center'; ctx.fillText(lanes[i], x, bottom-7);
     }
     if (active && !paused) {
+      updateLongNotes(time);
       for (const note of chart) {
-        if (processed.has(note.id)) continue;
+        const isHeld = heldLongs.has(note.id);
+        if (processed.has(note.id) && !isHeld) continue;
         const diff = note.time - time;
-        if (diff < -.115) { judge(note, 1); continue; }
+        if (!isHeld && diff < -.115) { judge(note, 1); continue; }
         if (diff > travel + .25) continue;
         const y = hitY - diff / travel * (hitY - top);
         const x = note.lane * laneWidth + 7, nw = laneWidth - 14, nh = Math.max(12, Math.min(20, laneWidth*.19));
-        if (y < -nh || y > bottom+10) continue;
+        if (note.duration) {
+          const tailDiff = note.time + note.duration - time;
+          const tailY = hitY - tailDiff / travel * (hitY - top);
+          const bodyTop = Math.max(top, Math.min(y, tailY));
+          const bodyBottom = Math.min(hitY + 10, Math.max(y, tailY));
+          if (bodyBottom > bodyTop) {
+            ctx.globalAlpha = isHeld ? .9 : .55;
+            ctx.shadowColor = laneColors[note.lane]; ctx.shadowBlur = 12;
+            roundRect(ctx,x+nw*.3,bodyTop,nw*.4,bodyBottom-bodyTop,Math.min(7,nw*.2),laneColors[note.lane]);
+            ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+          }
+        }
+        if (y < -nh || y > bottom+10 || (isHeld && diff < -travel)) continue;
         ctx.shadowColor = laneColors[note.lane]; ctx.shadowBlur = 16;
         const grad=ctx.createLinearGradient(x,y-nh/2,x+nw,y+nh/2); grad.addColorStop(0,laneColors[note.lane]); grad.addColorStop(.5,'#fff'); grad.addColorStop(1,laneColors[note.lane]);
         roundRect(ctx,x,y-nh/2,nw,nh,5,grad); ctx.shadowBlur=0;
         ctx.fillStyle='#fff9'; roundRect(ctx,x+5,y-nh/2+2,nw-10,2,2,'#ffffff8a');
       }
-      if (chart.length && time > chart[chart.length-1].time + 1.1) finishRun();
+      if (chart.length && time > chartEndTime() + 1.1) finishRun();
       if (mode === 'file' && audio.ended) finishRun();
       if (mode === 'youtube' && youtubePlayer && youtubeReady) { try { if (youtubePlayer.getPlayerState() === 0) finishRun(); } catch (_) {} }
       if (mode === 'demo' && time > demoEnd) finishRun();
@@ -115,6 +161,7 @@
 
   function pressLane(lane) {
     if (!active || paused || lane < 0 || lane > 3) return;
+    heldLanes.add(lane);
     hitFlash[lane] = performance.now() + 100;
     const t = gameTime(); let nearest = null, nearestDiff = Infinity;
     for (const note of chart) {
@@ -124,6 +171,11 @@
     }
     if (nearest && nearestDiff <= .115) judge(nearest, nearestDiff);
   }
+  document.addEventListener('keyup', event => {
+    const lane = ({d:0,f:1,j:2,k:3,ArrowLeft:0,ArrowDown:1,ArrowUp:2,ArrowRight:3})[event.key];
+    if (lane !== undefined) releaseLane(lane);
+  });
+  window.addEventListener('blur', () => { for (const lane of [...heldLanes]) releaseLane(lane); });
   document.addEventListener('keydown', (event) => {
     if (event.repeat) return;
     const lane = ({d:0,f:1,j:2,k:3,ArrowLeft:0,ArrowDown:1,ArrowUp:2,ArrowRight:3})[event.key];
@@ -131,10 +183,23 @@
     if (event.code === 'Space' && active) { event.preventDefault(); togglePause(); }
   });
   $$('.lane-controls button').forEach(button => {
-    button.addEventListener('pointerdown', e => { e.preventDefault(); const lane=Number(button.dataset.lane); button.classList.add('active'); pressLane(lane); setTimeout(()=>button.classList.remove('active'),110); });
+    const lane=Number(button.dataset.lane);
+    button.addEventListener('pointerdown', e => { e.preventDefault(); button.setPointerCapture?.(e.pointerId); button.classList.add('active'); pressLane(lane); });
+    const release = e => { e.preventDefault(); releaseLane(lane); button.classList.remove('active'); };
+    button.addEventListener('pointerup', release); button.addEventListener('pointercancel', release); button.addEventListener('lostpointercapture', release);
   });
   function $$(s){return [...document.querySelectorAll(s)];}
 
+  function addLongNotes(notes, duration) {
+    const longDuration = Math.max(.65, Math.min(1.35, duration));
+    for (let i=5;i<notes.length;i+=12) {
+      const note=notes[i];
+      const nextSameLane=notes.slice(i+1).find(next=>next.lane===note.lane);
+      const available=nextSameLane ? nextSameLane.time-note.time-.18 : longDuration;
+      if (available >= .65) note.duration=Math.min(longDuration,available);
+    }
+    return notes;
+  }
   function generateGrid(bpm, duration=90) {
     const beat = 60 / Math.max(60, Math.min(200, bpm)); const notes=[]; let i=0;
     for(let t=1.15;t<duration-.2;t+=beat/2) {
@@ -142,7 +207,7 @@
       if (i%2===0 || i%4===3) notes.push({id:notes.length,time:+t.toFixed(4),lane:Math.floor((i*3 + Math.floor(i/4))%4)});
       i++;
     }
-    return notes;
+    return addLongNotes(notes,beat*1.5);
   }
   function makeOnsetChart(buffer) {
     const sampleRate=buffer.sampleRate, channel=buffer.getChannelData(0), frameSize=Math.floor(sampleRate*.02), rms=[];
@@ -159,7 +224,7 @@
       const bpm=estimateBpm(times)||120; return {notes:generateGrid(bpm,buffer.duration),bpm,detected:false};
     }
     const bpm=estimateBpm(times)||120;
-    const notes=times.map((t,i)=>({id:i,time:+t.toFixed(3),lane:(i*3+Math.floor(i/3))%4}));
+    const notes=addLongNotes(times.map((t,i)=>({id:i,time:+t.toFixed(3),lane:(i*3+Math.floor(i/3))%4})),.95);
     return {notes,bpm,detected:true};
   }
   function estimateBpm(times){
@@ -211,7 +276,7 @@
     else if(mode==='demo')startDemoAudio();
   }
   function stopRun(resetUi=true){
-    active=false;paused=false;audio.pause();if(youtubePlayer&&youtubeReady){try{youtubePlayer.pauseVideo();}catch(_){}}
+    active=false;paused=false;heldLanes.clear();heldLongs.clear();audio.pause();if(youtubePlayer&&youtubeReady){try{youtubePlayer.pauseVideo();}catch(_){}}
     if(audioContext&&audioContext.state==='running'&&mode==='demo')audioContext.suspend();
     $('.game-panel').classList.remove('is-playing');$('#pauseBtn').textContent='Ⅱ';
     if(resetUi){$('#gameOverlay').classList.remove('hidden');$('#countdown').classList.add('hidden');$('#pauseBtn').disabled=true;$('#restartBtn').disabled=true;setStatus('READY WHEN YOU ARE');}
